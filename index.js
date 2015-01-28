@@ -3,12 +3,15 @@ var xml2js = require("xml2js");
 var http = require("http");
 var querystring = require("querystring");
 var GoogleClientLogin = require('googleclientlogin').GoogleClientLogin;
+var Promise = require('bluebird');
+var _ = require('lodash');
+var moment = require('moment');
 
 var GOOGLE_FEED_URL = "https://spreadsheets.google.com/feeds/";
 
 // NOTE: worksheet IDs start at 1
 
-module.exports = function( ss_key, auth_id ){
+var GoogleSpreadsheet = function( ss_key, auth_id ){
   var self = this;
   var google_auth;
 
@@ -190,7 +193,130 @@ module.exports = function( ss_key, auth_id ){
       }
 
     })
-  }
+  };
+
+
+  Promise.promisifyAll(this);
+};
+
+module.exports = function(ss_key, options) {
+
+  //
+  // This object is a wrapper object of the Google Spreadsheet object
+  // Always start off by authenticating.
+  //
+  var spreadsheet = new GoogleSpreadsheet(ss_key);
+  var authPromise = spreadsheet.setAuthAsync(options.email, options.password)
+    .then(function() {
+      console.log('Google Spreadsheets authentication successful');
+    })
+    .catch(function(err) {
+      console.log('Google Spreadsheets authentication error');
+      console.log(err);
+      throw err;
+    });
+
+
+  var getInfoAsync = function() {
+
+    // set auth to be able to edit/add/delete
+    return authPromise.then(function() {
+
+      // column names are set by google based on the first row of your sheet
+      return spreadsheet.getInfoAsync();
+    });
+  };
+
+  var getRowsAsync = function(worksheet_id, opts, query) {
+
+    // set auth to be able to edit/add/delete
+    return authPromise.then(function() {
+
+      // column names are set by google based on the first row of your sheet
+      return spreadsheet.getRowsAsync(worksheet_id, opts, query);
+    });
+  };
+
+  var getCellsAsync = function(worksheet_id, opts) {
+
+    // set auth to be able to edit/add/delete
+    return authPromise.then(function() {
+
+      // column names are set by google based on the first row of your sheet
+      return spreadsheet.getCellsAsync(worksheet_id, opts);
+    });
+  };
+
+  var addRowAsync = function(data, options) {
+    (options) || (options = {});
+    var worksheet = options.worksheet || 1;
+
+
+    // set auth to be able to edit/add/delete
+    return authPromise.then(function() {
+
+      // column names are set by google based on the first row of your sheet
+      return spreadsheet.addRowAsync(worksheet, data)
+    });
+  };
+
+  var upsertRowAsync = function(data, options) {
+
+    (options) || (options = {});
+    var today = moment().format('MM/DD/YYYY');
+    var worksheet = options.worksheet || 1;
+    var keyColumn = options.keyColumn || 'date';
+
+    return authPromise.then(function() {
+
+      return spreadsheet.getInfoAsync().then(function(sheetInfo) {
+
+        //
+        // Since there's lots of async stuff, need
+        // to wrap it all with a promise
+        //
+        var d = Promise.defer();
+
+        // use worksheet object if you want to forget about ids
+        sheetInfo.worksheets[worksheet].getRows(function(err, rows) {
+
+          // Find the row
+          var row = _.find(rows, function(r) {
+            return r[keyColumn] === today;
+          });
+
+          if (row) {
+
+            // If the row exists, update and save
+            _.extend(row, data);
+            row.save();
+            return d.resolve();
+          } else {
+
+            // Otherwise, add a new row
+            spreadsheet.addRowAsync(worksheet, data).then(function() {
+              d.resolve();
+            });
+          };
+
+          return d.promise;
+        });
+      });
+    });
+  };
+
+
+  //
+  // Return Promisified API that wraps the authentication method
+  //
+
+  return {
+    getInfoAsync  : getInfoAsync,
+    getRowsAsync  : getRowsAsync,
+    getCellsAsync : getCellsAsync,
+    addRowAsync   : addRowAsync,
+    upsertRowAsync: upsertRowAsync
+  };
 };
 
 // Classes
